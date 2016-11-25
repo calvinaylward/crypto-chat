@@ -123,6 +123,7 @@ class ChatManager:
                 participant_list = participants.split(";")
             # Add current user to the participant list
             participant_list.append(self.user_name)
+
             data = json.dumps({
                 "participants": json.dumps(participant_list)
             })
@@ -174,6 +175,47 @@ class ChatManager:
         else:
             print "Please log in before accessing Your conversations"
             state = INIT
+
+    def get_participants(self, c_id):
+        '''
+        Retrieves all the conversations (their IDs and participant lists) that the current user is a participant of
+        :return: None
+        '''
+        #global state
+        # Allowed only, if user is logged in
+        if self.is_logged_in:
+            try:
+                # Querying the server for the conversations of the current user (user is a participant)
+                req = urllib2.Request("http://" + SERVER + ":" + SERVER_PORT + "/conversations")
+                # Include Cookie
+                req.add_header("Cookie", self.cookie)
+                r = urllib2.urlopen(req)
+            except urllib2.HTTPError as e:
+                #print "Unable to download conversations, server returned HTTP", e.code, e.msg
+                return
+            except urllib2.URLError as e:
+                #print "Unable to download conversations, reason:", e.message
+                return
+            conversations = json.loads(r.read())
+            # Print conversations with IDs and participant lists
+            current_participants = []
+
+            for c in conversations:
+
+                if c_id == str(c["conversation_id"]):
+
+                #conversation_id = c["conversation_id"]
+                #print "Conversation", conversation_id, "has the following members:"
+                    for participant in c["participants"]:
+
+                        current_participants.append(participant)
+                    print current_participants
+                    return current_participants
+                    #print "\t", participant
+        else:
+            print "Please log in before accessing Your conversations"
+            return
+            #state = INIT
 
     def get_messages_of_conversation(self):
         '''
@@ -279,6 +321,8 @@ class ChatManager:
                 if state == CREATE_CONVERSATION:
                     # User wants to create a conversation
                     self.create_conversation()
+                    #self.current_conversation = Conversation(conversation_id, self)
+                    #self.current_conversation.setup_conversation()
                     # Creation finished, go back to the initial state
                     state = INIT
                 elif state == SELECT_CONVERSATION:

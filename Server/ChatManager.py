@@ -79,6 +79,18 @@ class ChatManager:
         print "Creating new conversation..."
         new_conversation = Conversation(participant_list)
         self.active_conversations.append(new_conversation)
+    
+    def get_conversation_users(self, conversation_id):
+        """
+        Find a conversation based on the conversation id.
+        :param conversation_id: the id of the searched conversation
+        :return: the conversation object
+        """
+        for conversation in self.active_conversations:
+            if unicode(str(conversation.conversation_id)) == conversation_id:
+                return conversation.participants
+        print "Searched conversation not found! Conversation ID: " + conversation_id
+
 
     def get_conversation(self, conversation_id):
         """

@@ -1,7 +1,17 @@
 from message import Message
 import base64
+import json
+import os.path
+import os
 from time import sleep
 from threading import Thread
+from Crypto import Random
+from Crypto.Cipher import AES
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Hash import HMAC
+from Crypto.Hash import SHA256
+from Crypto.Signature import PKCS1_PSS
 
 class Conversation:
     '''
@@ -93,21 +103,130 @@ class Conversation:
                     self.last_processed_msg_id = msg_id
                 sleep(0.01)
 
+    def owner_create_conversation(self):
+        '''
+        For when the conversation is first started
+        '''
+
+        user = self.manager.user_name
+        privateFile = "user_"+user+"_privatekey.txt"
+        publicFile = "user_"+user+"_publickey.txt"
+
+        if os.path.exists(os.getcwd() + "/" + privateFile) and os.access(privateFile, os.R_OK) and os.path.exists(os.getcwd() + "/" +publicFile) and os.access(publicFile, os.R_OK):
+
+            with open(publicFile, "r") as pF:
+                user_public_key = RSA.importKey(pF.read())
+            pF.close()
+
+            with open(privateFile, "r") as f:
+                private_key = RSA.importKey(f.read());
+            f.close()
+
+        else:
+            key = RSA.generate(2048)
+            private_key = key.exportKey('PEM')
+            user_public_key = key.publickey().exportKey('PEM')
+
+            with open(privateFile, "w") as f:
+                f.write(key.exportKey('PEM'))
+            f.close()
+
+            with open(publicFile, "w") as pF:
+                pF.write(key.publickey().exportKey('PEM'))
+            pF.close()
+
+        print "Key set up complete"
+
+        #keys have been made
+        iv = Random.new().read(AES.block_size)
+        temp_key = SHA256.new(key.exportKey())
+        cipher = AES.new(temp_key[0:32], AES.MODE_CBC, iv)
+
+        buf = "hello"
+        plength = AES.block_size - (len(buf)%AES.block_size)
+        buf += chr(plength)*plength
+
+        p = b64encode(iv+cipher.encrypt(buf))
+        print p
+
+        buf = b64decode(p)
+        iv = buf[:AES.block_size]
+        buf= buf[AES.block_size:]
+
+        #cipher = AES.new(temp_key[0:32], AES.MODE_CBC, iv)
+        buf = cipher.decrypt(buf)
+        #remove padding
+        buf = buf[:len(buf)-ord(buf[-1])]
+        print buf
+
+
+
     def setup_conversation(self):
         '''
         Prepares the conversation for usage
         :return:
         '''
+
+
+
+
         # You can use this function to initiate your key exchange
 		# Useful stuff that you may need:
 		# - name of the current user: self.manager.user_name
-        # - list of other users in the converstaion: list_of_users = self.manager.get_other_user()
+        # - list of other users in the converstaion: l
         # You may need to send some init message from this point of your code
 		# you can do that with self.process_outgoing_message("...") or whatever you may want to send here...
 
         # Since there is no crypto in the current version, no preparation is needed, so do nothing
-		# replace this with anything needed for your key exchange 
-        pass
+		# replace this with anything needed for your key exchange
+
+        user = self.manager.user_name
+        list_of_users = self.manager.get_participants(self.id)
+        for i in range(len(list_of_users)):
+            list_of_users[i] = str(list_of_users[i])
+        print list_of_users
+        privateFile = "user_"+user+"_privatekey.txt"
+        publicFile = "user_"+user+"_publickey.txt"
+        #print list_of_users
+        #print os.path
+
+        if os.path.exists(os.getcwd() + "/" + privateFile) and os.access(privateFile, os.R_OK) and os.path.exists(os.getcwd() + "/" +publicFile) and os.access(publicFile, os.R_OK):
+
+            with open(publicFile, "r") as pF:
+                user_public_key = RSA.importKey(pF.read())
+            pF.close()
+
+            with open(privateFile, "r") as f:
+                private_key = RSA.importKey(f.read());
+            f.close()
+
+        else:
+            key = RSA.generate(2048)
+            private_key = key.exportKey('PEM')
+            user_public_key = key.publickey().exportKey('PEM')
+
+            with open(privateFile, "w") as f:
+                f.write(key.exportKey('PEM'))
+            f.close()
+
+            with open(publicFile, "w") as pF:
+                pF.write(key.publickey().exportKey('PEM'))
+            pF.close()
+
+        print "Key set up complete"
+
+        folderPath = "Public_keys/"
+        fileString = "_publickey.txt"
+        users_init = []
+        for u in list_of_users:
+            if u != user:
+                with open(folderPath + u + fileString, "r") as keyIn:
+                    users_init.append(RSA.importKey(keyIn.read()))
+                keyIn.close()
+
+        #send inital contact
+
+
 
 
     def process_incoming_message(self, msg_raw, msg_id, owner_str):
