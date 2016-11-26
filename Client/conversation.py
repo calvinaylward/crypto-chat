@@ -1,6 +1,7 @@
 from config import *
 from message import Message
-import base64
+from base64 import b64encode
+from base64 import b64decode
 import json
 import os.path
 import os
@@ -12,7 +13,7 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Hash import HMAC
 from Crypto.Hash import SHA256
-from Crypto.Signature import PKCS1_PSS
+from Crypto.Signature import PKCS1_v1_5
 
 state = INIT
 
@@ -36,12 +37,17 @@ class Conversation:
         self.manager = manager # chat manager for sending messages
         self.run_infinite_loop = True
         self.list_of_users = self.manager.get_participants(self.id)
-        self.owner = list_of_users[len(list_of_users)-1]
+        self.owner = self.list_of_users[len(self.list_of_users)-1]
+        self.user_public_key = None
+        self.private_key = None
         self.msg_process_loop = Thread(
             target=self.process_all_messages
         ) # message processing loop
         self.msg_process_loop.start()
         self.msg_process_loop_started = True
+        self.users_init = []
+        self.key_pair =[]
+        self.RSA_key = None
 
     def append_msg_to_process(self, msg_json):
         '''
@@ -108,7 +114,7 @@ class Conversation:
                     self.last_processed_msg_id = msg_id
                 sleep(0.01)
 
-    
+
     def setup_conversation(self):
         '''
         Prepares the conversation for usage
@@ -131,9 +137,7 @@ class Conversation:
 
         user = self.manager.user_name
 
-        for i in range(len(list_of_users)):
-            list_of_users[i] = str(list_of_users[i])
-        print list_of_users
+
         privateFile = "user_"+user+"_privatekey.txt"
         publicFile = "user_"+user+"_publickey.txt"
         #print list_of_users
@@ -142,17 +146,17 @@ class Conversation:
         if os.path.exists(os.getcwd() + "/" + privateFile) and os.access(privateFile, os.R_OK) and os.path.exists(os.getcwd() + "/" +publicFile) and os.access(publicFile, os.R_OK):
 
             with open(publicFile, "r") as pF:
-                user_public_key = RSA.importKey(pF.read())
+                self.user_public_key = RSA.importKey(pF.read())
             pF.close()
 
             with open(privateFile, "r") as f:
-                private_key = RSA.importKey(f.read());
+                self.private_key = RSA.importKey(f.read());
             f.close()
 
         else:
-            key = RSA.generate(2048)
-            private_key = key.exportKey('PEM')
-            user_public_key = key.publickey().exportKey('PEM')
+            self.RSA_key = RSA.generate(2048)
+            self.private_key = key.exportKey()
+            self.user_public_key = key.publickey().exportKey()
 
             with open(privateFile, "w") as f:
                 f.write(key.exportKey('PEM'))
@@ -164,29 +168,35 @@ class Conversation:
 
         print "Key set up complete"
 
+
+        folderPath = "Public_keys/"
+        fileString = "_publickey.txt"
+        for u in self.list_of_users:
+                with open(folderPath + u + fileString, "r") as keyIn:
+                    self.users_init.append(RSA.importKey(keyIn.read()))
+                keyIn.close()
+
         #for creator only
-
-        if self.user_name == owner:
-
-            folderPath = "Public_keys/"
-            fileString = "_publickey.txt"
-            users_init = []
+        if user == self.owner:
+            print self.users_init
+            print "\n"
+            print self.user_public_key
             count = 0
-            for u in list_of_users:
+            for u in self.list_of_users:
                 if u != user:
-                    with open(folderPath + u + fileString, "r") as keyIn:
-                        users_init.append(RSA.importKey(keyIn.read()))
-                        cipher = PKCS1_OAEP.new(users_init[count])
-                        self.manager.post_message_to_conversation(cipher.encrypt(user + u))
-                    keyIn.close()
 
-
+                        cipher = PKCS1_OAEP.new(self.users_init[count])
+                        data = user.encode('utf-8') + u.encode('utf-8')
+                        msg = b64encode(cipher.encrypt(data))
+                        self.manager.post_message_to_conversation(msg)
+                count+=1
 
             state = STARTED
 
         else :
             #not the owner/ request key / listen for key
             state = LISTENING
+            print "wait"
 
 
 
@@ -221,7 +231,116 @@ class Conversation:
         '''
         user = self.manager.user
 
-        if state == INIT:
+        if user == self.owner and state == STARTED:
+            print "user STARTED"
+
+            #reply with nonce from other participants
+            cipher_STARTED = PKCS1_OAEP.new(self.private_key)
+            buf_STARTED = cipher_STARTED.decrypt(msg_raw)
+            index = buf_STARTED.index('|')
+            buf_NAMES = buf_STARTED[:index]
+            nonce_STARTED = buf_STARTED[index+1:]
+            if(owner_str + user) == buf_NAMES :
+                #correct response
+                #generate keys
+                session_key = SHA256.new(self.user_public_key)
+                session_key = session_key[0:32]
+                mac_key = Random.get_random_bytes(32)
+                iv_GENERATED = Random.new().read(AES.block_size)
+                self.key_pair = [session_key , mac_key]
+                state = GENERATED
+
+
+            else:
+                #print bad message (need to account for multiple participants TODO: use array!) state and nonce
+                print "Y U DO DIS"
+                return
+
+            #send keys
+            nonce_GENERATED = Random.new().read(16)
+            data = user + "|" + nonce_GENERATED + "|" + self.key_pair + "|" + iv_GENERATED
+
+
+            #for loop through users state array if they are state == GENERATED then send them this message
+            user_index = self.list_of_users.index(owner_str)
+            cipher_GENERATED = PKCS1_OAEP.new(self.users_init[user_index])
+            encrypted_msg = cipher_GENERATED.encrypt(data.encode('utf-8'))
+
+            data2 = nonce_STARTED + encrypted_msg
+
+            #create sign
+            h = SHA.new(data2)
+
+            signer = PCKS1_v1_5.new(self.private_key)
+            signed_data2 = b64encode(signer.sign(data2))
+
+            #msg = b64encode(cipher.encrypt(data))
+            #self.manager.post_message_to_conversation(msg)
+
+
+            #TODO send nonce_STARTED + iv + encrypted_msg + signed_data2
+            #start timer
+            #change state? in GENERATED right now
+
+
+
+        elif state == LISTENING:#not owner listening for initial msg
+            cipher1 = PKCS1_OAEP.new(self.private_key)
+            buf = b64decode(msg_raw)
+            decrypted_message = cipher.decrypt(buf)
+
+
+            msg_check = self.owner + user
+            print msg_check
+            if decrypted_message != msg_check:
+                print "Invalid message"
+                return
+                #throw an exception?
+            else:
+                print "Valid message"
+
+            #generate Nonce
+            nonce_user = Random.new().read(16)
+            reply_message = user + self.owner + "|" + nonce_user
+            pubkeystr = self.users_init[len(self.list_of_users) -1]
+
+            pubkey = RSA.importKey(pubkeystr)
+            cipher2 = PKCS1_OAEP.new(pubkey)
+
+
+            self.process_outgoing_message(cipher2.encrypt(reply_message), True)
+            #TODO
+            #start a timer for key freshness
+
+            #change state
+            state = FIRST_NONCE
+
+        elif state == FIRST_NONCE:
+            print state
+            #TODO
+            #receiving key message from the creator
+            #check incoming nonce against nonce_user and make sure timer hasn't expired
+            #save the iv
+            #decrypt the third part of the message A |Na|K|IV with self.private_key
+            #check iv values
+            #Check signature of last part of the message against hashed part of third part
+            #e.g. msg = A |Na|K|IV, h = SHA256.new(msg) == unsigned(signature) / maybe we use verify?
+            # now we have the new session key, iv and a nonce from the creator
+            # respond with E(B|NA|K)PuA , E(E(B|NA|K)PuA)PrB
+            # second part is signed of the first part
+            #change state to FINAL_CHECK
+        elif state == GENERATED :
+            print state
+            #TODO
+            # creator waiting for final response from participants
+            # parse msg = B |Na|K|
+            # check if Na == nonce_GENERATED for user B
+            #make sure nonce is received in enough time to be considered valid
+            # check if K = self.key_pair
+            #verify signature of second part of message
+            #state == VERIFIED
+
+        if state == VERIFIED or state == FINAL_CHECK: #we can probably make these the same
             kfile = open("user_" + user + "_privatekey.txt")
             keystr = kfile.read()
             kfile.close()
@@ -231,22 +350,11 @@ class Conversation:
 
             plain_text = cipher.decrypt(msg_raw)
 
-        #    state =
-        #looking for data encrypted with our public key
-        #key exchange initiate
-        # if state == None
-        # start second step with other user
-
-
-        # process message here
-		# example is base64 decoding, extend this with any crypto processing of your protocol
-        decoded_msg = base64.decodestring(msg_raw)
-
-        # print message and add it to the list of printed messages
-        self.print_message(
-            msg_raw=decoded_msg,
-            owner_str=owner_str
-        )
+            # print message and add it to the list of printed messages
+            self.print_message(
+                msg_raw=decoded_msg,
+                owner_str=owner_str
+            )
 
     def process_outgoing_message(self, msg_raw, originates_from_console=False):
         '''
@@ -255,6 +363,8 @@ class Conversation:
         :param msg_raw: raw message
         :return: message to be sent to the server
         '''
+
+        #TODO encrypt with self.key_pair
 
         # if the message has been typed into the console, record it, so it is never printed again during chatting
         if originates_from_console == True:
