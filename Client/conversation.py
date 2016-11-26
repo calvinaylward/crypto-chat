@@ -1,3 +1,4 @@
+from config import *
 from message import Message
 import base64
 import json
@@ -12,6 +13,8 @@ from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Hash import HMAC
 from Crypto.Hash import SHA256
 from Crypto.Signature import PKCS1_PSS
+
+state = INIT
 
 class Conversation:
     '''
@@ -32,6 +35,8 @@ class Conversation:
         assert isinstance(manager, ChatManager)
         self.manager = manager # chat manager for sending messages
         self.run_infinite_loop = True
+        self.list_of_users = self.manager.get_participants(self.id)
+        self.owner = list_of_users[len(list_of_users)-1]
         self.msg_process_loop = Thread(
             target=self.process_all_messages
         ) # message processing loop
@@ -103,72 +108,16 @@ class Conversation:
                     self.last_processed_msg_id = msg_id
                 sleep(0.01)
 
-    def owner_create_conversation(self):
-        '''
-        For when the conversation is first started
-        '''
-
-        user = self.manager.user_name
-        privateFile = "user_"+user+"_privatekey.txt"
-        publicFile = "user_"+user+"_publickey.txt"
-
-        if os.path.exists(os.getcwd() + "/" + privateFile) and os.access(privateFile, os.R_OK) and os.path.exists(os.getcwd() + "/" +publicFile) and os.access(publicFile, os.R_OK):
-
-            with open(publicFile, "r") as pF:
-                user_public_key = RSA.importKey(pF.read())
-            pF.close()
-
-            with open(privateFile, "r") as f:
-                private_key = RSA.importKey(f.read());
-            f.close()
-
-        else:
-            key = RSA.generate(2048)
-            private_key = key.exportKey('PEM')
-            user_public_key = key.publickey().exportKey('PEM')
-
-            with open(privateFile, "w") as f:
-                f.write(key.exportKey('PEM'))
-            f.close()
-
-            with open(publicFile, "w") as pF:
-                pF.write(key.publickey().exportKey('PEM'))
-            pF.close()
-
-        print "Key set up complete"
-
-        #keys have been made
-        iv = Random.new().read(AES.block_size)
-        temp_key = SHA256.new(key.exportKey())
-        cipher = AES.new(temp_key[0:32], AES.MODE_CBC, iv)
-
-        buf = "hello"
-        plength = AES.block_size - (len(buf)%AES.block_size)
-        buf += chr(plength)*plength
-
-        p = b64encode(iv+cipher.encrypt(buf))
-        print p
-
-        buf = b64decode(p)
-        iv = buf[:AES.block_size]
-        buf= buf[AES.block_size:]
-
-        #cipher = AES.new(temp_key[0:32], AES.MODE_CBC, iv)
-        buf = cipher.decrypt(buf)
-        #remove padding
-        buf = buf[:len(buf)-ord(buf[-1])]
-        print buf
-
-
-
+    
     def setup_conversation(self):
         '''
         Prepares the conversation for usage
         :return:
         '''
 
+        global state
 
-
+        #state = START
 
         # You can use this function to initiate your key exchange
 		# Useful stuff that you may need:
@@ -181,7 +130,7 @@ class Conversation:
 		# replace this with anything needed for your key exchange
 
         user = self.manager.user_name
-        list_of_users = self.manager.get_participants(self.id)
+
         for i in range(len(list_of_users)):
             list_of_users[i] = str(list_of_users[i])
         print list_of_users
@@ -215,16 +164,47 @@ class Conversation:
 
         print "Key set up complete"
 
-        folderPath = "Public_keys/"
-        fileString = "_publickey.txt"
-        users_init = []
-        for u in list_of_users:
-            if u != user:
-                with open(folderPath + u + fileString, "r") as keyIn:
-                    users_init.append(RSA.importKey(keyIn.read()))
-                keyIn.close()
+        #for creator only
 
-        #send inital contact
+        if self.user_name == owner:
+
+            folderPath = "Public_keys/"
+            fileString = "_publickey.txt"
+            users_init = []
+            count = 0
+            for u in list_of_users:
+                if u != user:
+                    with open(folderPath + u + fileString, "r") as keyIn:
+                        users_init.append(RSA.importKey(keyIn.read()))
+                        cipher = PKCS1_OAEP.new(users_init[count])
+                        self.manager.post_message_to_conversation(cipher.encrypt(user + u))
+                    keyIn.close()
+
+
+
+            state = STARTED
+
+        else :
+            #not the owner/ request key / listen for key
+            state = LISTENING
+
+
+
+
+        #data = send_to + sent_from + nonce
+        #data = "Elon/Bill/1343"
+        #sign with sent_from's private key
+        #encrypt with send_to's public key
+        #self.manager.post_message_to_conversation(data)
+
+
+
+
+
+
+
+        #if user != self.owner:
+        #    self.manager.request_keys()
 
 
 
@@ -239,6 +219,24 @@ class Conversation:
         :param print_all: is the message part of the conversation history?
         :return: None
         '''
+        user = self.manager.user
+
+        if state == INIT:
+            kfile = open("user_" + user + "_privatekey.txt")
+            keystr = kfile.read()
+            kfile.close()
+
+            private_key = RSA.importKey(keystr)
+            cipher = PKCS1_OAEP.new(private_key)
+
+            plain_text = cipher.decrypt(msg_raw)
+
+        #    state =
+        #looking for data encrypted with our public key
+        #key exchange initiate
+        # if state == None
+        # start second step with other user
+
 
         # process message here
 		# example is base64 decoding, extend this with any crypto processing of your protocol
